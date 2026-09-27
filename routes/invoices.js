@@ -5,6 +5,7 @@ const { getSettings, logActivity } = require('../lib/db');
 const { runBilling, recalcTotal, nextInvoiceNumber, today, addDays } = require('../lib/billing');
 const { invoicesPdf, money, usDate } = require('../lib/pdf');
 const { sendMail } = require('../lib/mailer');
+const { locationId, SQL } = require('../lib/locations');
 
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
 
@@ -31,6 +32,8 @@ module.exports = ({ db }) => {
     else if (st === 'open') where.push(`i.status = 'sent'`);
     else if (['draft', 'sent', 'paid', 'void'].includes(st)) { where.push('i.status = @st'); args.st = st; }
     if (req.query.customer_id) { where.push('i.customer_id = @cid'); args.cid = Number(req.query.customer_id); }
+    const loc = locationId(req);
+    if (loc) where.push(`${SQL.invoice('i')} = ${loc}`);
     if (req.query.q) {
       where.push(`(i.number LIKE @q OR c.first_name || ' ' || c.last_name LIKE @q OR c.company LIKE @q)`);
       args.q = `%${req.query.q}%`;

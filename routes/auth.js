@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const { getSettings } = require('../lib/db');
 const { permissionsFor, requireLogin, requirePerm, httpError, wrap } = require('../lib/auth');
 const { isConfigured } = require('../lib/mailer');
+const sms = require('../lib/sms');
 
 const ROLES = ['admin', 'owner', 'user'];
 
@@ -34,7 +35,8 @@ module.exports = ({ db }) => {
       company: publicCompany(),
       needsFirstAdmin: userCount() === 0,
       user: req.user ? { ...req.user, permissions: permissionsFor(req.user.role) } : null,
-      features: { email: isConfigured(s), stripe: s.stripeEnabled === 'true' },
+      features: { email: isConfigured(s), sms: sms.isConfigured(s), stripe: s.stripeEnabled === 'true', reminders: s.remindersEnabled === 'true' },
+      locations: req.user ? db.prepare('SELECT id, name FROM locations ORDER BY sort, name COLLATE NOCASE').all() : [],
     });
   });
 

@@ -1,9 +1,12 @@
 import { get, post, put, del, api, esc, money, dollars, date, when, icon, toast, fail, sheet, confirmSheet, fields, formData } from '../ui.js';
 import { main, state, roleName } from '../app.js';
 
+async function refreshSession() { state.session = await get('/session'); }
+
 const TABS = [
-  ['company', 'Company'], ['spots', 'Buildings & spots'], ['pricing', 'Pricing'],
-  ['users', 'Users'], ['import', 'Import'], ['email', 'Email'], ['payments', 'Online payments'],
+  ['company', 'Company'], ['spots', 'Locations & spots'], ['pricing', 'Pricing'],
+  ['agreement', 'Agreement'], ['reminders', 'Reminders'], ['email', 'Email & texts'],
+  ['users', 'Users'], ['import', 'Import'], ['payments', 'Online payments'],
 ];
 
 export async function setup(tab = 'company') {
@@ -16,7 +19,7 @@ export async function setup(tab = 'company') {
   };
   document.querySelector('#tabs .on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
   const pane = document.getElementById('pane');
-  await ({ company, spots, pricing, users, import: importPane, email, payments })[tab](pane);
+  await ({ company, spots, pricing, users, import: importPane, email, payments, agreement, reminders })[tab](pane);
 }
 
 // ---------- Company ----------
@@ -60,15 +63,21 @@ async function refreshBrand() {
 
 // ---------- Buildings & spots ----------
 async function spots(pane) {
-  const [buildings, spotList, types] = await Promise.all([get('/buildings'), get('/spots'), get('/spot-types')]);
+  const [buildings, spotList, types, locations] = await Promise.all([get('/buildings'), get('/spots'), get('/spot-types'), get('/locations')]);
   const typeOpts = [['', '— No type —'], ...types.map((t) => [t.id, t.name])];
   pane.innerHTML = `
+    <div class="card" style="margin-bottom:16px"><div class="card-head"><div><h3>Locations</h3>
+        <div class="muted small">${locations.length > 1 ? 'Everyone can switch between locations from the menu.' : 'Only needed if you run more than one yard or site. Add a second location to turn on the location switcher.'}</div></div>
+        <button class="btn sm" id="addL">${icon.plus} Add location</button></div>
+      ${locations.length ? `<ul class="list">${locations.map((l) => `<li><div class="item" data-el="${l.id}" style="cursor:pointer"><div class="main"><div class="title">${esc(l.name)}</div>
+        <div class="sub">${esc([l.address, [l.city, l.state].filter(Boolean).join(', '), l.phone].filter(Boolean).join(' · ') || 'No address')} · ${l.building_count} building${l.building_count === 1 ? '' : 's'}</div></div>
+        ${icon.edit.replace('<svg', '<svg width="16" height="16" style="color:var(--ink-3)"')}</div></li>`).join('')}</ul>` : ''}</div>
     <div class="info">Set up each building or lot, then add the numbered spots inside it. Spot <b>types</b> (under Pricing) set the default price.</div>
     <div class="row" style="margin-bottom:14px"><button class="btn primary" id="addB">${icon.plus} Add building</button>
       ${buildings.length ? `<button class="btn" id="addS">${icon.plus} Add spots</button>` : ''}</div>
     <div class="stack">${buildings.length ? buildings.map((b) => {
       const list = spotList.filter((s) => s.building_id === b.id);
-      return `<div class="card"><div class="card-head"><div><h3>${esc(b.name)}</h3><div class="muted small">${esc(b.location || '')}${b.location ? ' · ' : ''}${list.length} spot${list.length === 1 ? '' : 's'}</div></div>
+      return `<div class="card"><div class="card-head"><div><h3>${esc(b.name)}</h3><div class="muted small">${locations.length > 1 ? esc(b.location_name || 'No location') + ' · ' : ''}${esc(b.location || '')}${b.location ? ' · ' : ''}${list.length} spot${list.length === 1 ? '' : 's'}</div></div>
         <button class="btn sm" data-eb="${b.id}">${icon.edit} Edit</button></div>
         ${list.length ? `<div class="scroll-x"><table class="data"><thead><tr><th>Spot</th><th>Type</th><th>Size</th><th>Status</th><th></th></tr></thead><tbody>
           ${list.map((s) => `<tr class="click" data-es="${s.id}"><td><b>${esc(s.label)}</b></td><td>${esc(s.type_name || '—')}</td>
@@ -79,21 +88,50 @@ async function spots(pane) {
     }).join('') : '<div class="card empty">No buildings yet. Add your first building or lot.</div>'}</div>`;
 
   const reload = () => spots(pane).catch(fail);
-  pane.querySelector('#addB').onclick = () => buildingForm(null, reload);
-  pane.querySelectorAll('[data-eb]').forEach((b) => b.onclick = () => buildingForm(buildings.find((x) => x.id === Number(b.dataset.eb)), reload));
+  pane.querySelector('#addB').onclick = () => buildingForm(null, reload, locations);
+  pane.querySelectorAll('[data-eb]').forEach((b) => b.onclick = () => buildingForm(buildings.find((x) => x.id === Number(b.dataset.eb)), reload, locations));
+  const reloadAll = async () => { await refreshSession(); location.reload(); };
+  pane.querySelector('#addL').onclick = () => locationForm(null, locations.length ? reload : reloadAll, locations.length === 1 ? reloadAll : null);
+  pane.querySelectorAll('[data-el]').forEach((r) => r.onclick = () => locationForm(locations.find((l) => l.id === Number(r.dataset.el)), reloadAll));
   const addS = pane.querySelector('#addS');
   if (addS) addS.onclick = () => addSpotsForm(buildings, typeOpts, reload);
   pane.querySelectorAll('[data-es]').forEach((r) => r.onclick = () => editSpotForm(spotList.find((s) => s.id === Number(r.dataset.es)), buildings, typeOpts, reload));
 }
 
-function buildingForm(b, reload) {
+function locationForm(l, reload, reloadAfterAdd) {
+  const s = sheet({
+    title: l ? 'Edit location' : 'Add location',
+    body: `<form class="grid2">${fields([
+      { name: 'name', label: 'Location name', full: true, placeholder: 'Lake Ozark yard' },
+      { name: 'address', label: 'Street address', full: true },
+      { name: 'city', label: 'City' }, { name: 'state', label: 'State' },
+      { name: 'zip', label: 'ZIP' }, { name: 'phone', label: 'Phone', type: 'tel' },
+    ], l || {})}</form>
+    ${!l ? '<p class="muted small">Your first location takes all existing buildings. After adding a second one, set each building’s location.</p>' : ''}`,
+    buttons: [
+      ...(l ? [{ label: 'Delete', kind: 'danger', onClick: async (close) => {
+        if (!(await confirmSheet('Delete location?', `Delete ${l.name}? It must have no buildings.`, 'Delete', true))) return;
+        await del(`/locations/${l.id}`); close(); reload();
+      } }] : []),
+      { label: 'Cancel', onClick: (c) => c() },
+      { label: 'Save', kind: 'primary', onClick: async (close) => {
+        const v = formData(s.body);
+        if (l) await put(`/locations/${l.id}`, v); else await post('/locations', v);
+        close(); toast('Saved'); (reloadAfterAdd && !l ? reloadAfterAdd : reload)();
+      } },
+    ],
+  });
+}
+
+function buildingForm(b, reload, locations = []) {
   const s = sheet({
     title: b ? 'Edit building' : 'Add building',
     body: `<form>${fields([
       { name: 'name', label: 'Name', placeholder: 'Building A, North Lot…' },
-      { name: 'location', label: 'Location / description' },
+      ...(locations.length ? [{ name: 'location_id', label: 'Location', type: 'select', options: [['', '—'], ...locations.map((l) => [l.id, l.name])] }] : []),
+      { name: 'location', label: 'Description', placeholder: 'Heated, north side…' },
       { name: 'notes', label: 'Notes', type: 'textarea', rows: 2 },
-    ], b || {})}</form>`,
+    ], b ? { ...b, location_id: b.location_id ?? '' } : { location_id: locations.length === 1 ? locations[0].id : (state.location || '') })}</form>`,
     buttons: [
       ...(b ? [{ label: 'Delete', kind: 'danger', onClick: async (close) => {
         if (!(await confirmSheet('Delete building?', `Deletes ${b.name} and all its spots.`, 'Delete', true))) return;
@@ -314,14 +352,14 @@ async function importPane(pane) {
   }
 }
 
-// ---------- Email ----------
+// ---------- Email & texts ----------
 async function email(pane) {
   const s = await get('/settings');
-  pane.innerHTML = `<div class="card pad">
+  pane.innerHTML = `<div class="stack"><div class="card pad">
     <h2 style="margin-bottom:6px">Sending email</h2>
-    <p class="muted" style="margin-top:0">Invoices are emailed through your email provider’s SMTP server. For Gmail or Google Workspace use
+    <p class="muted" style="margin-top:0">Invoices, reminders and signing links are emailed through your email provider’s SMTP server. For Gmail or Google Workspace use
       <b>smtp.gmail.com</b>, port <b>465</b>, secure on, and an “app password”. For Outlook/Microsoft 365 use <b>smtp.office365.com</b>, port <b>587</b>.</p>
-    <form class="grid2">${fields([
+    <form class="grid2" id="fe">${fields([
       { name: 'smtpHost', label: 'SMTP server', placeholder: 'smtp.gmail.com' },
       { name: 'smtpPort', label: 'Port', type: 'number', placeholder: '587' },
       { name: 'smtpUser', label: 'Username', autocomplete: 'off' },
@@ -330,15 +368,104 @@ async function email(pane) {
       { name: 'smtpSecure', label: 'Use secure connection (port 465)', type: 'checkbox' },
     ], s)}
     <div class="row" style="grid-column:1/-1"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="test">${icon.send} Send test email</button></div>
+    </form></div>
+
+    <div class="card pad">
+    <h2 style="margin-bottom:6px">Text messages (optional)</h2>
+    <p class="muted" style="margin-top:0">Texts go through <b>Twilio</b> (about 1¢ per text plus a phone number). Create an account at twilio.com, buy a number,
+      and paste the Account SID, Auth Token and number here. Texts only go to customers marked <b>“agreed to receive text messages”</b>.</p>
+    <form class="grid2" id="fs">${fields([
+      { name: 'smsEnabled', label: 'Turn on text messages', type: 'checkbox', full: true },
+      { name: 'twilioSid', label: 'Account SID', autocomplete: 'off', placeholder: 'AC…' },
+      { name: 'twilioToken', label: s.twilioTokenSet ? 'Auth Token (saved — leave blank to keep)' : 'Auth Token', type: 'password', autocomplete: 'new-password' },
+      { name: 'twilioFrom', label: 'Twilio phone number', type: 'tel', placeholder: '+15735550123' },
+      { name: 'testTo', label: 'Your mobile (for a test)', type: 'tel' },
+    ], s)}
+    <div class="row" style="grid-column:1/-1"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="testSms">${icon.chat} Send test text</button></div>
+    </form></div></div>`;
+  const fe = pane.querySelector('#fe');
+  fe.onsubmit = async (e) => {
+    e.preventDefault();
+    const v = formData(fe); v.smtpSecure = String(v.smtpSecure);
+    try { await put('/settings', v); toast('Saved'); await refreshSession(); } catch (err) { fail(err); }
+  };
+  pane.querySelector('#test').onclick = async () => {
+    try { await post('/settings/test-email', {}); toast(`Test email sent to ${state.session.user.email}`); } catch (err) { fail(err); }
+  };
+  const fs = pane.querySelector('#fs');
+  fs.onsubmit = async (e) => {
+    e.preventDefault();
+    const v = formData(fs); delete v.testTo; v.smsEnabled = String(v.smsEnabled);
+    try { await put('/settings', v); toast('Saved'); await refreshSession(); } catch (err) { fail(err); }
+  };
+  pane.querySelector('#testSms').onclick = async () => {
+    try { await post('/settings/test-sms', { to: fs.testTo.value }); toast('Test text sent'); } catch (err) { fail(err); }
+  };
+}
+
+// ---------- Agreement ----------
+const MERGE = ['customer_name', 'company_name', 'spot', 'building', 'location', 'boat', 'registration', 'rate', 'billing_cycle', 'billing_period', 'start_date', 'end_date', 'today', 'customer_address', 'customer_phone', 'customer_email', 'company_phone'];
+
+async function agreement(pane) {
+  const s = await get('/settings');
+  pane.innerHTML = `<div class="card pad">
+    <h2 style="margin-bottom:6px">Rental agreement</h2>
+    <p class="muted" style="margin-top:0">This is the text customers read and sign. Words in <code>{{double braces}}</code> fill in automatically from the customer and their rental.
+      <b>The starter text is a general example — have your attorney review it before use.</b></p>
+    <form>
+      ${fields([{ name: 'agreementTitle', label: 'Title', value: s.agreementTitle }])}
+      <label class="field"><span>Agreement text</span><textarea class="template" name="agreementTemplate">${esc(s.agreementTemplate)}</textarea></label>
+      <div class="muted small" style="margin:-6px 0 6px">Tap to insert:</div>
+      <div class="chips" id="chips">${MERGE.map((m) => `<button type="button" class="chip">{{${m}}}</button>`).join('')}</div>
+      <div class="row" style="margin-top:16px"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="pv">Preview with a real customer</button></div>
+    </form></div>
+    <p class="muted small">Changes apply to agreements sent from now on. Agreements already sent or signed keep the text the customer saw.</p>`;
+  const f = pane.querySelector('form');
+  const ta = f.agreementTemplate;
+  pane.querySelector('#chips').onclick = (e) => {
+    const b = e.target.closest('.chip'); if (!b) return;
+    const [a, z] = [ta.selectionStart, ta.selectionEnd];
+    ta.setRangeText(b.textContent, a, z, 'end'); ta.focus();
+  };
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    try { await put('/settings', { agreementTitle: f.agreementTitle.value, agreementTemplate: ta.value }); toast('Agreement saved'); } catch (err) { fail(err); }
+  };
+  pane.querySelector('#pv').onclick = async () => {
+    try {
+      const r = await get(`/agreements/preview?template=${encodeURIComponent(ta.value)}`);
+      sheet({ title: f.agreementTitle.value || r.title, wide: true, body: `<p class="muted small" style="margin-top:0">Filled in with a current rental as an example.</p><div class="agreement-text">${esc(r.body)}</div>` });
+    } catch (err) { fail(err); }
+  };
+}
+
+// ---------- Reminders ----------
+async function reminders(pane) {
+  const s = await get('/settings');
+  const feats = state.session.features;
+  pane.innerHTML = `<div class="card pad">
+    <h2 style="margin-bottom:6px">Automatic reminders</h2>
+    <p class="muted" style="margin-top:0">Once a day, the app emails (and texts, if set up and the customer agreed) reminders that are due. Each reminder goes out once;
+      past-due notices repeat on the schedule below. Customers can be excluded on their record.</p>
+    ${!feats.email ? '<div class="info" style="background:var(--warn-soft)">Email isn’t set up yet, so reminders can’t be sent. Set it up under <a href="#/setup/email">Email & texts</a>.</div>' : ''}
+    <form class="grid2">${fields([
+      { name: 'remindersEnabled', label: 'Send reminders automatically every day', type: 'checkbox', full: true },
+      { name: 'reminderHour', label: 'Send at', type: 'select', options: Array.from({ length: 14 }, (_, i) => [i + 7, `${((i + 7 - 1) % 12) + 1}:00 ${i + 7 < 12 ? 'AM' : 'PM'}`]) },
+      { name: 'timezone', label: 'Time zone', type: 'select', options: [['America/New_York', 'Eastern'], ['America/Chicago', 'Central'], ['America/Denver', 'Mountain'], ['America/Phoenix', 'Arizona'], ['America/Los_Angeles', 'Pacific'], ['America/Anchorage', 'Alaska'], ['Pacific/Honolulu', 'Hawaii']] },
+      { name: 'reminderDueDays', label: 'Payment due: days before due date', type: 'number', hint: '0 turns this off' },
+      { name: 'reminderOverdueDays', label: 'Past due: days after due date', type: 'number' },
+      { name: 'reminderOverdueRepeatDays', label: 'Past due: repeat every (days)', type: 'number' },
+      { name: 'reminderOverdueMax', label: 'Past due: most notices per invoice', type: 'number', hint: '0 turns this off. The last one says “final notice”.' },
+      { name: 'reminderInsuranceDays', label: 'Insurance: days before it expires', type: 'number', hint: '0 turns this off' },
+      { name: 'reminderEndingDays', label: 'Rental ending: days before end date', type: 'number', hint: '0 turns this off' },
+    ], s)}
+    <div class="row" style="grid-column:1/-1"><button class="btn primary" type="submit">Save</button><a class="btn" href="#/invoices?reminders">${icon.bell} See what’s due now</a></div>
     </form></div>`;
   const f = pane.querySelector('form');
   f.onsubmit = async (e) => {
     e.preventDefault();
-    const v = formData(f); v.smtpSecure = String(v.smtpSecure);
-    try { await put('/settings', v); toast('Saved'); state.session = await get('/session'); } catch (err) { fail(err); }
-  };
-  pane.querySelector('#test').onclick = async () => {
-    try { await post('/settings/test-email', {}); toast(`Test email sent to ${state.session.user.email}`); } catch (err) { fail(err); }
+    const v = formData(f); v.remindersEnabled = String(v.remindersEnabled);
+    try { await put('/settings', v); toast('Saved'); await refreshSession(); } catch (err) { fail(err); }
   };
 }
 

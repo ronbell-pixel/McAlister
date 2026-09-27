@@ -1,5 +1,5 @@
 import { get, post, put, del, esc, money, dollars, date, when, icon, toast, fail, sheet, confirmSheet, fields, formData, fullName, initials, today, statusBadge } from '../ui.js';
-import { main, can, state, clearQuery } from '../app.js';
+import { main, can, state, clearQuery, withLoc } from '../app.js';
 import { notesPanel, photosPanel } from '../widgets.js';
 
 const STATUS = [['active', 'Active'], ['prospect', 'Prospect'], ['inactive', 'Inactive']];
@@ -21,7 +21,7 @@ export async function customerList() {
 
   const listEl = document.getElementById('list');
   async function load() {
-    const rows = await get(`/customers?status=${filter}&q=${encodeURIComponent(search)}`);
+    const rows = await get(withLoc(`/customers?status=${filter}&q=${encodeURIComponent(search)}`));
     if (!rows.length) { listEl.innerHTML = `<div class="empty">${search ? 'No matches.' : 'No customers here yet.'}</div>`; return; }
     listEl.innerHTML = `<ul class="list">${rows.map((c) => `<li><a class="item" href="#/customers/${c.id}">
       <div class="avatar">${esc(initials(c))}</div>
@@ -60,12 +60,15 @@ const CUSTOMER_FIELDS = [
   { name: 'status', label: 'Status', type: 'select', options: STATUS },
   { name: 'emergency_name', label: 'Emergency contact' },
   { name: 'emergency_phone', label: 'Emergency phone', type: 'tel' },
+  { html: '<div style="grid-column:1/-1;margin-top:4px"><span class="muted small" style="font-weight:600">Messages</span></div>' },
+  { name: 'reminders_ok', label: 'Send automatic reminders (payment, insurance, renewal)', type: 'checkbox', full: true },
+  { name: 'sms_ok', label: 'Customer agreed to receive text messages', type: 'checkbox', full: true },
 ];
 
 export function customerForm(c = null, onSaved) {
   const s = sheet({
     title: c ? 'Edit customer' : 'New customer',
-    body: `<form class="grid2">${fields(CUSTOMER_FIELDS, c || { status: 'active' })}</form>`,
+    body: `<form class="grid2">${fields(CUSTOMER_FIELDS, c ? { ...c, sms_ok: Boolean(c.sms_ok), reminders_ok: c.reminders_ok !== 0 } : { status: 'active', reminders_ok: true })}</form>`,
     buttons: [
       { label: 'Cancel', onClick: (close) => close() },
       { label: c ? 'Save' : 'Add customer', kind: 'primary', onClick: async (close) => {
@@ -157,16 +160,92 @@ const CYCLE = { monthly: 'Monthly', quarterly: 'Quarterly', yearly: 'Yearly' };
 function renderRentals(d, reload) {
   const el = document.getElementById('rentals');
   const canEdit = can('contracts.edit');
+  const agFor = (k) => (d.agreements || []).find((a) => a.contract_id === k.id);
+  const agLine = (k) => {
+    if (k.status !== 'active') return '';
+    const a = agFor(k);
+    const badge = !a ? '<span class="badge">Agreement not sent</span>'
+      : a.status === 'signed' ? `<span class="badge good">${icon.check.replace('<svg', '<svg width="12" height="12"')} Signed ${date(a.signed_at)}</span>`
+      : `<span class="badge warn">Sent ${date(a.sent_at)}${a.viewed_at ? ' · opened' : ''}</span>`;
+    return `<div class="sub-actions">${badge}${canEdit || (a && a.status === 'signed') ? `<button class="btn sm" data-ag="${k.id}" style="min-height:28px;padding:0 10px">${icon.pen} ${a && a.status === 'signed' ? 'View' : a ? 'Manage' : 'Send for signature'}</button>` : ''}</div>`;
+  };
   el.innerHTML = `<div class="card-head"><h3>Storage rentals</h3>${canEdit ? `<button class="btn sm" id="addRental">${icon.plus} Assign spot</button>` : ''}</div>
-    <ul class="list">${d.contracts.length ? d.contracts.map((k) => `<li><div class="item" ${canEdit ? `data-k="${k.id}" style="cursor:pointer"` : ''}>
-      <div class="main"><div class="title">${k.spot_label ? `${esc(k.building)} · Spot ${esc(k.spot_label)}` : 'No spot assigned'}</div>
+    ${d.waitlist && d.waitlist.length ? `<div class="card-body" style="padding:10px 16px;border-bottom:1px solid var(--line)"><span class="badge warn">${icon.clock.replace('<svg', '<svg width="12" height="12"')} On the waitlist since ${date(d.waitlist[0].created_at)}</span></div>` : ''}
+    <ul class="list">${d.contracts.length ? d.contracts.map((k) => `<li><div class="item" style="align-items:flex-start"><div class="main" ${canEdit ? `data-k="${k.id}" style="cursor:pointer"` : ''}>
+      <div class="title">${k.spot_label ? `${esc(k.building)} · Spot ${esc(k.spot_label)}` : 'No spot assigned'}</div>
       <div class="sub">${CYCLE[k.billing_cycle]}${k.rate_cents != null ? ' · ' + money(k.rate_cents) : ''}${k.boat_name || k.boat_make ? ' · ' + esc(k.boat_name || k.boat_make) : ''}
         ${k.status === 'active' ? ` · next bill ${date(k.next_bill_date)}` : ` · ended ${date(k.end_date)}`}</div></div>
-      ${k.status === 'active' ? '<span class="badge good">Active</span>' : '<span class="badge">Ended</span>'}</div></li>`).join('')
+      ${k.status === 'active' ? '<span class="badge good">Active</span>' : '<span class="badge">Ended</span>'}</div>
+      <div style="padding:0 16px 12px;margin-top:-6px">${agLine(k)}</div></li>`).join('')
       : '<li class="empty">No spot assigned.</li>'}</ul>`;
+  el.querySelectorAll('[data-ag]').forEach((b) => b.onclick = () => {
+    const k = d.contracts.find((x) => x.id === Number(b.dataset.ag));
+    agreementSheet(d, k, agFor(k), reload).catch(fail);
+  });
   if (!canEdit) return;
   document.getElementById('addRental').onclick = () => rentalForm(d, null, reload);
   el.querySelectorAll('[data-k]').forEach((row) => row.onclick = () => rentalForm(d, d.contracts.find((k) => k.id === Number(row.dataset.k)), reload));
+}
+
+// ---------- E-signature ----------
+async function agreementSheet(d, k, a, reload) {
+  const c = d.customer;
+  const feats = state.session.features;
+  if (a && a.status === 'signed') {
+    const s = sheet({
+      title: 'Signed agreement',
+      body: `<dl class="kv"><dt>Signed by</dt><dd>${esc(a.signer_name)}</dd><dt>Signed</dt><dd>${when(a.signed_at)} (${date(a.signed_at)})</dd>
+        <dt>Sent</dt><dd>${date(a.sent_at)}${a.sent_via ? ` by ${a.sent_via === 'sms' ? 'text' : a.sent_via}` : ' (signed in person)'}</dd></dl>
+        <p class="muted small">The signed PDF, with the signature record, is saved under Photos & documents.</p>`,
+      buttons: [
+        ...(can('contracts.edit') ? [{ label: 'Send a new one', onClick: async (close) => { close(); agreementSheet(d, k, null, reload); } }] : []),
+        { label: `${icon.download} Open signed PDF`, kind: 'primary', onClick: (close) => { window.open(`/api/attachments/${a.attachment_id}/file`, '_blank'); close(); } },
+      ],
+    });
+    return s;
+  }
+  const pv = await get(`/agreements/preview?contract_id=${k.id}`);
+  const canEmail = Boolean(c.email) && feats.email;
+  const canText = Boolean(c.phone) && feats.sms;
+  const s = sheet({
+    title: a ? 'Agreement waiting for signature' : 'Send agreement for signature',
+    wide: true,
+    body: `${a ? `<div class="info">Sent ${date(a.sent_at)}${a.sent_via ? ` by ${a.sent_via === 'sms' ? 'text' : 'email'}` : ''}. ${a.viewed_at ? `Opened ${when(a.viewed_at)}.` : 'Not opened yet.'} Links last 30 days; sending again renews it.</div>`
+        : `<p class="muted small" style="margin-top:0">${esc(fullName(c))} gets a secure link to read and sign on their phone or computer. Or hand them your iPad and use <b>Sign here now</b>. The text comes from Setup → Agreement.</p>`}
+      <h3 style="margin:4px 0 8px">${esc(pv.title)}</h3>
+      <div class="agreement-text">${esc(a ? '' : pv.body) || '<span class="muted">Same text as when it was sent.</span>'}</div>
+      ${!canEmail || !canText ? `<p class="muted small">${[!c.email ? 'No email on file.' : !feats.email ? 'Email isn’t set up.' : '', !c.phone ? 'No phone on file.' : !feats.sms ? 'Texting isn’t set up.' : ''].filter(Boolean).join(' ')}</p>` : ''}`,
+    buttons: [
+      ...(a ? [{ label: 'Cancel it', kind: 'danger', onClick: async (close) => {
+        if (!(await confirmSheet('Cancel this agreement?', 'The signing link will stop working.', 'Cancel agreement', true))) return;
+        await post(`/agreements/${a.id}/void`); close(); reload();
+      } }] : []),
+      { label: `${icon.pen} Sign here now`, onClick: async (close, btn) => {
+        const url = a ? (await get(`/agreements/${a.id}/link`)).url : (await post(`/contracts/${k.id}/agreement`, { via: 'none' })).url;
+        close(); reload();
+        signHereNow(url);
+      } },
+      ...(canText ? [{ label: `${icon.chat} Text link`, onClick: async (close) => {
+        if (a) await post(`/agreements/${a.id}/send`, { via: 'sms' }); else await post(`/contracts/${k.id}/agreement`, { via: 'sms' });
+        close(); toast('Signing link texted'); reload();
+      } }] : []),
+      ...(canEmail ? [{ label: `${icon.mail} Email link`, kind: 'primary', onClick: async (close) => {
+        if (a) await post(`/agreements/${a.id}/send`, { via: 'email' }); else await post(`/contracts/${k.id}/agreement`, { via: 'email' });
+        close(); toast('Signing link emailed'); reload();
+      } }] : []),
+    ],
+  });
+  return s;
+}
+
+// Opening a new tab after a network call gets blocked on iPhone, so show a tap-to-open button.
+function signHereNow(url) {
+  sheet({
+    title: 'Ready to sign',
+    body: `<p style="margin-top:0">Open the signing page and hand the device to the customer. When they finish, come back to this tab.</p>
+      <a class="btn primary block" href="${esc(url)}" target="_blank" rel="noopener">${icon.pen} Open signing page</a>
+      <p class="muted small" style="margin-bottom:0;overflow-wrap:anywhere">Link: ${esc(url)}</p>`,
+  });
 }
 
 async function rentalForm(d, k, reload) {

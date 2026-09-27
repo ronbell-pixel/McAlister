@@ -1,12 +1,13 @@
 import { get, post, esc, money, dollars, icon, toast, fail, sheet, fields, formData, fullName, today } from '../ui.js';
-import { main, can } from '../app.js';
+import { main, can, withLoc, multiLocation } from '../app.js';
+import { matchesFor } from './waitlist.js';
 import { notesPanel, photosPanel } from '../widgets.js';
 
 const CYCLE = { monthly: 'Monthly', quarterly: 'Quarterly', yearly: 'Yearly' };
 
 export async function spotsBoard() {
   let show = 'all';
-  let spots = await get('/spots');
+  let spots = await get(withLoc('/spots'));
   let types = await get('/spot-types');
 
   main().innerHTML = `
@@ -24,7 +25,7 @@ export async function spotsBoard() {
       return;
     }
     const groups = {};
-    for (const s of spots) (groups[s.building] ||= []).push(s);
+    for (const s of spots) (groups[multiLocation() && s.location_name ? `${s.location_name} · ${s.building}` : s.building] ||= []).push(s);
     board.innerHTML = Object.entries(groups).map(([b, list]) => {
       const rented = list.filter((s) => s.contract_id).length;
       const shown = list.filter((s) => show === 'all' || (show === 'vacant' ? !s.contract_id && s.active : s.contract_id));
@@ -34,7 +35,7 @@ export async function spotsBoard() {
           : '<div class="muted small">None.</div>'}</div></div>`;
     }).join('');
     board.querySelectorAll('.spot').forEach((b) => b.onclick = () => spotSheet(spots.find((s) => s.id === Number(b.dataset.id)), async () => {
-      spots = await get('/spots'); render();
+      spots = await get(withLoc('/spots')); render();
     }));
   }
   document.getElementById('seg').onclick = (e) => {
@@ -60,6 +61,7 @@ export async function spotsBoard() {
              ${s.rate_cents != null ? `<br><span class="muted small">${CYCLE[s.billing_cycle]} · ${money(s.rate_cents)}</span>` : ''}`
           : s.active ? '<span class="badge good">Vacant</span>' : '<span class="badge">Not in use</span>'}</dd>
       </dl>
+      ${!s.contract_id && s.active ? '<div id="matches"></div>' : ''}
       ${!s.contract_id && s.active && can('contracts.edit') ? '<div class="card pad" id="rent"></div>' : ''}
       <div id="panels" class="stack"></div>`;
     const sh = sheet({ title: `Spot ${s.label}`, body, wide: true });
@@ -67,6 +69,14 @@ export async function spotsBoard() {
     const panels = body.querySelector('#panels');
     notesPanel(panels, 'spot', s.id);
     photosPanel(panels, 'spot', s.id, undefined, 'Photos');
+    const mEl = body.querySelector('#matches');
+    if (mEl) matchesFor(s.id).then((list) => {
+      if (!list.length) return;
+      mEl.innerHTML = `<div class="match"><b>${list.length} on the waitlist fit this spot</b>
+        <ul class="list" style="margin-top:6px">${list.slice(0, 5).map((w, i) => `<li><a class="item" href="#/waitlist" style="padding:8px 0;min-height:0" data-close>
+          <div class="main"><div class="title">${i + 1}. ${esc(w.customer_name || w.name)}</div><div class="sub">${esc([w.boat_length_ft ? w.boat_length_ft + ' ft' : '', w.phone].filter(Boolean).join(' · '))}</div></div></a></li>`).join('')}</ul></div>`;
+      mEl.querySelectorAll('[data-close]').forEach((a) => a.onclick = () => sh.close());
+    }).catch(() => {});
     const rent = body.querySelector('#rent');
     if (rent) rentForm(rent, s, () => { sh.close(); refresh(); });
   }

@@ -5,12 +5,13 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const { getSettings, setSetting, SETTING_KEYS } = require('../lib/db');
-const { requirePerm, httpError, wrap, can } = require('../lib/auth');
+const { requirePerm, requireLogin, httpError, wrap, can } = require('../lib/auth');
 const importer = require('../lib/importer');
 const { sendMail } = require('../lib/mailer');
 const { removeChildren } = require('../lib/cleanup');
+const { locSql } = require('../lib/locations');
 
-const SECRET_KEYS = ['smtpPass', 'stripeSecretKey'];
+const SECRET_KEYS = ['smtpPass', 'stripeSecretKey', 'twilioToken'];
 const cents = (v) => {
   const n = parseFloat(String(v ?? '').replace(/[$,\s]/g, ''));
   return Number.isFinite(n) ? Math.round(n * 100) : 0;
@@ -45,6 +46,13 @@ module.exports = ({ db, paths }) => {
     res.json({ ok: true });
   });
 
+  r.post('/settings/test-sms', requirePerm('setup'), wrap(async (req, res) => {
+    const { sendSms } = require('../lib/sms');
+    if (!req.body?.to) throw httpError(400, 'Enter a mobile number to test with.');
+    await sendSms(getSettings(db), { to: req.body.to, body: `Test text from ${getSettings(db).name}. Texting is working.` });
+    res.json({ ok: true });
+  }));
+
   r.post('/settings/test-email', requirePerm('setup'), wrap(async (req, res) => {
     await sendMail(getSettings(db), {
       to: req.body.to || req.user.email,
@@ -54,20 +62,48 @@ module.exports = ({ db, paths }) => {
     res.json({ ok: true });
   }));
 
+  // ---- Locations ----
+  r.get('/locations', requireLogin, (req, res) => {
+    res.json(db.prepare(`SELECT l.*, (SELECT COUNT(*) FROM buildings b WHERE b.location_id = l.id) AS building_count
+      FROM locations l ORDER BY l.sort, l.name COLLATE NOCASE`).all());
+  });
+  const locArgs = (b) => {
+    if (!b.name || !String(b.name).trim()) throw httpError(400, 'Location name is required.');
+    return [String(b.name).trim(), b.address || '', b.city || '', b.state || '', b.zip || '', b.phone || ''];
+  };
+  r.post('/locations', requirePerm('setup'), (req, res) => {
+    const id = db.prepare('INSERT INTO locations (name, address, city, state, zip, phone) VALUES (?, ?, ?, ?, ?, ?)').run(...locArgs(req.body || {})).lastInsertRowid;
+    // The first location adopts every building that has none, so nothing is left out.
+    if (db.prepare('SELECT COUNT(*) AS n FROM locations').get().n === 1) db.prepare('UPDATE buildings SET location_id = ? WHERE location_id IS NULL').run(id);
+    res.json({ id });
+  });
+  r.put('/locations/:id', requirePerm('setup'), (req, res) => {
+    db.prepare('UPDATE locations SET name = ?, address = ?, city = ?, state = ?, zip = ?, phone = ? WHERE id = ?').run(...locArgs(req.body || {}), req.params.id);
+    res.json({ ok: true });
+  });
+  r.delete('/locations/:id', requirePerm('setup'), (req, res) => {
+    const n = db.prepare('SELECT COUNT(*) AS n FROM buildings WHERE location_id = ?').get(req.params.id).n;
+    if (n) throw httpError(400, `Move or delete its ${n} building(s) first.`);
+    db.prepare('DELETE FROM locations WHERE id = ?').run(req.params.id);
+    res.json({ ok: true });
+  });
+
   // ---- Buildings ----
   r.get('/buildings', requirePerm('spots.view'), (req, res) => {
-    res.json(db.prepare(`SELECT b.*, (SELECT COUNT(*) FROM spots s WHERE s.building_id = b.id AND s.active = 1) AS spot_count
-      FROM buildings b ORDER BY b.sort, b.name`).all());
+    const f = locSql(req);
+    res.json(db.prepare(`SELECT b.*, l.name AS location_name, (SELECT COUNT(*) FROM spots s WHERE s.building_id = b.id AND s.active = 1) AS spot_count
+      FROM buildings b LEFT JOIN locations l ON l.id = b.location_id WHERE 1=1${f.sql}
+      ORDER BY l.sort, l.name, b.sort, b.name`).all());
   });
+  const bldArgs = (b) => {
+    if (!b.name || !String(b.name).trim()) throw httpError(400, 'Building name is required.');
+    return [String(b.name).trim(), b.location || '', b.notes || '', b.location_id ? Number(b.location_id) : null];
+  };
   r.post('/buildings', requirePerm('setup'), (req, res) => {
-    const { name, location, notes } = req.body || {};
-    if (!name) throw httpError(400, 'Building name is required.');
-    res.json({ id: db.prepare('INSERT INTO buildings (name, location, notes) VALUES (?, ?, ?)').run(name.trim(), location || '', notes || '').lastInsertRowid });
+    res.json({ id: db.prepare('INSERT INTO buildings (name, location, notes, location_id) VALUES (?, ?, ?, ?)').run(...bldArgs(req.body || {})).lastInsertRowid });
   });
   r.put('/buildings/:id', requirePerm('setup'), (req, res) => {
-    const { name, location, notes } = req.body || {};
-    if (!name) throw httpError(400, 'Building name is required.');
-    db.prepare('UPDATE buildings SET name = ?, location = ?, notes = ? WHERE id = ?').run(name.trim(), location || '', notes || '', req.params.id);
+    db.prepare('UPDATE buildings SET name = ?, location = ?, notes = ?, location_id = ? WHERE id = ?').run(...bldArgs(req.body || {}), req.params.id);
     res.json({ ok: true });
   });
   r.delete('/buildings/:id', requirePerm('setup'), (req, res) => {
@@ -105,17 +141,20 @@ module.exports = ({ db, paths }) => {
 
   // ---- Spots (with who is in each one) ----
   r.get('/spots', requirePerm('spots.view'), (req, res) => {
-    const rows = db.prepare(`SELECT s.*, b.name AS building, t.name AS type_name,
+    const f = locSql(req);
+    const rows = db.prepare(`SELECT s.*, b.name AS building, b.location_id, l.name AS location_name, t.name AS type_name,
         c.id AS contract_id, c.customer_id, c.rate_cents, c.billing_cycle,
         TRIM(cu.first_name || ' ' || cu.last_name) AS customer_name,
         bo.name AS boat_name, bo.make AS boat_make, bo.model AS boat_model
       FROM spots s
       JOIN buildings b ON b.id = s.building_id
+      LEFT JOIN locations l ON l.id = b.location_id
       LEFT JOIN spot_types t ON t.id = s.spot_type_id
       LEFT JOIN contracts c ON c.spot_id = s.id AND c.status = 'active'
       LEFT JOIN customers cu ON cu.id = c.customer_id
       LEFT JOIN boats bo ON bo.id = c.boat_id
-      ORDER BY b.sort, b.name COLLATE NOCASE`).all();
+      WHERE 1=1${f.sql}
+      ORDER BY l.sort, l.name COLLATE NOCASE, b.sort, b.name COLLATE NOCASE`).all();
     // Natural order within each building: A-2 before A-10.
     const coll = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
     const bOrder = new Map();

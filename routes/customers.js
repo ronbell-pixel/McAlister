@@ -4,8 +4,9 @@ const { requirePerm, httpError, can } = require('../lib/auth');
 const { logActivity } = require('../lib/db');
 const { defaultRate, today } = require('../lib/billing');
 const { removeChildren } = require('../lib/cleanup');
+const { locationId, SQL } = require('../lib/locations');
 
-const CUSTOMER_FIELDS = ['first_name', 'last_name', 'company', 'email', 'phone', 'alt_phone', 'address', 'city', 'state', 'zip', 'emergency_name', 'emergency_phone', 'status'];
+const CUSTOMER_FIELDS = ['first_name', 'last_name', 'company', 'email', 'phone', 'alt_phone', 'address', 'city', 'state', 'zip', 'emergency_name', 'emergency_phone', 'status', 'sms_ok', 'reminders_ok'];
 const BOAT_FIELDS = ['name', 'make', 'model', 'year', 'length_ft', 'registration', 'insurance_carrier', 'insurance_policy', 'insurance_expires', 'notes'];
 const NOTE_TYPES = ['customer', 'spot', 'incident'];
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
@@ -26,6 +27,9 @@ module.exports = ({ db, paths }) => {
       args.q = `%${q}%`;
     }
     if (['active', 'inactive', 'prospect'].includes(status)) { where.push('c.status = @status'); args.status = status; }
+    // Location filter: customers renting there, plus anyone who has never rented (so new people aren't hidden).
+    const loc = locationId(req);
+    if (loc) where.push(`(${SQL.customerIn('c.id', loc)} OR NOT EXISTS (SELECT 1 FROM contracts kx WHERE kx.customer_id = c.id AND kx.spot_id IS NOT NULL))`);
     const rows = db.prepare(`SELECT c.id, c.first_name, c.last_name, c.company, c.email, c.phone, c.status,
         (SELECT GROUP_CONCAT(s.label, ', ') FROM contracts k JOIN spots s ON s.id = k.spot_id WHERE k.customer_id = c.id AND k.status = 'active') AS spots,
         (SELECT COALESCE(SUM(total_cents),0) FROM invoices i WHERE i.customer_id = c.id AND i.status = 'sent') AS balance_cents
@@ -50,6 +54,9 @@ module.exports = ({ db, paths }) => {
       attachments: db.prepare(`SELECT a.id, a.original_name, a.mime, a.caption, a.created_at, u.name AS uploaded_by_name FROM attachments a
         LEFT JOIN users u ON u.id = a.uploaded_by WHERE a.entity_type = 'customer' AND a.entity_id = ? ORDER BY a.id DESC`).all(id),
       incidents: db.prepare(`SELECT id, title, occurred_on, status, category FROM incidents WHERE customer_id = ? ORDER BY occurred_on DESC`).all(id),
+      agreements: db.prepare(`SELECT id, contract_id, title, status, sent_at, sent_via, viewed_at, signed_at, signer_name, attachment_id
+        FROM agreements WHERE customer_id = ? AND status != 'void' ORDER BY id DESC`).all(id),
+      waitlist: db.prepare(`SELECT id, status, created_at FROM waitlist WHERE customer_id = ? AND status IN ('waiting','offered')`).all(id),
       activity: db.prepare(`SELECT a.*, u.name AS user_name FROM activity a LEFT JOIN users u ON u.id = a.user_id WHERE a.customer_id = ? ORDER BY a.id DESC LIMIT 50`).all(id),
     };
     if (can(req.user, 'invoices')) {
@@ -64,6 +71,9 @@ module.exports = ({ db, paths }) => {
     const v = {};
     for (const f of CUSTOMER_FIELDS) v[f] = b[f] == null ? '' : String(b[f]).trim();
     if (!['active', 'inactive', 'prospect'].includes(v.status)) v.status = 'active';
+    // Checkboxes: texting needs an explicit yes; reminders default to on.
+    v.sms_ok = b.sms_ok === true || b.sms_ok === 'true' || b.sms_ok === 1 ? 1 : 0;
+    v.reminders_ok = b.reminders_ok === false || b.reminders_ok === 'false' || b.reminders_ok === 0 ? 0 : 1;
     if (!v.first_name && !v.last_name && !v.company) throw httpError(400, 'Enter a name or company.');
     return v;
   };
@@ -142,6 +152,10 @@ module.exports = ({ db, paths }) => {
       VALUES (@customer_id, @spot_id, @boat_id, @billing_cycle, @rate_cents, @start_date, @next_bill_date, @end_date, @notes)`).run({ ...v, customer_id: cid }).lastInsertRowid;
     const spot = v.spot_id ? db.prepare('SELECT label FROM spots WHERE id = ?').get(v.spot_id) : null;
     logActivity(db, 'rental', `Rental started${spot ? ' — spot ' + spot.label : ''}`, { customerId: cid, userId: req.user.id });
+    // Anyone waiting who is this customer is now placed.
+    db.prepare(`UPDATE waitlist SET status = 'placed', updated_at = datetime('now') WHERE customer_id = ? AND status IN ('waiting','offered')`).run(cid);
+    // Renting a spot makes a prospect an active customer.
+    db.prepare(`UPDATE customers SET status = 'active' WHERE id = ? AND status = 'prospect'`).run(cid);
     res.json({ id });
   });
 

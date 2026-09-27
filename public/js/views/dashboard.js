@@ -1,8 +1,8 @@
 import { get, esc, money, moneyShort, date, when, icon } from '../ui.js';
-import { main, can, state } from '../app.js';
+import { main, can, state, withLoc, locationName } from '../app.js';
 
 export async function dashboard() {
-  const d = await get('/dashboard');
+  const d = await get(withLoc('/dashboard'));
   const f = d.financial;
   const occPct = d.occupancy.total ? Math.round((d.occupancy.rented / d.occupancy.total) * 100) : 0;
   const hello = new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 17 ? 'Good afternoon' : 'Good evening';
@@ -26,7 +26,7 @@ export async function dashboard() {
 
   main().innerHTML = `
     <div class="page-head"><div style="flex:1"><h1>${hello}${first ? ', ' + esc(first) : ''}</h1>
-      <div class="muted small">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</div></div>
+      <div class="muted small">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}${locationName() ? ' · ' + esc(locationName()) : ''}</div></div>
       <div class="actions dash-actions">
         <a class="btn" href="#/customers?new">${icon.plus} Customer</a>
         <a class="btn" href="#/log?new">${icon.alert} Log incident</a>
@@ -70,6 +70,14 @@ export async function dashboard() {
       <div class="stack">
         ${f ? `<div class="card pad"><div class="spread"><div><h3>Billing</h3><div class="muted small">${f.upcomingBilling} rental${f.upcomingBilling === 1 ? '' : 's'} due to bill in the next 30 days · ${f.drafts} draft${f.drafts === 1 ? '' : 's'} waiting</div></div>
           <a class="btn sm" href="#/invoices">${icon.invoice} Open</a></div></div>` : ''}
+
+        <div class="card"><ul class="list">
+          <li><a class="item" href="#/waitlist"><span style="color:var(--brand);width:22px">${icon.clock}</span><div class="main"><div class="title">Waitlist</div><div class="sub">${d.waitlist ? `${d.waitlist} ${d.waitlist === 1 ? 'person' : 'people'} waiting for a spot` : 'Nobody waiting'}</div></div>${icon.chevron.replace('<svg', '<svg class="chev"')}</a></li>
+          ${d.agreementsPending.length ? d.agreementsPending.map((a) => `<li><a class="item" href="#/customers/${a.customer_id}"><span style="color:var(--warn);width:22px">${icon.pen}</span>
+            <div class="main"><div class="title">${esc(a.customer_name)}</div><div class="sub">Agreement sent ${when(a.sent_at)}, not signed yet</div></div></a></li>`).join('') : ''}
+          ${can('invoices') ? `<li><a class="item" href="#/invoices?reminders"><span style="color:var(--brand);width:22px">${icon.bell}</span><div class="main"><div class="title">Reminders</div>
+            <div class="sub">${state.session.features.reminders ? `${d.remindersWeek} sent in the last 7 days` : 'Automatic reminders are off'}</div></div>${icon.chevron.replace('<svg', '<svg class="chev"')}</a></li>` : ''}
+        </ul></div>
 
         <div class="card"><div class="card-head"><h3>Open incidents</h3><a class="small" href="#/log">Log</a></div>
           <ul class="list">${d.openIncidents.length ? d.openIncidents.map((i) => `<li><a class="item" href="#/log/${i.id}">

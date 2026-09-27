@@ -1,4 +1,4 @@
-# McAlister Storage — Boat Storage App (Phase 1)
+# McAlister Storage — Boat Storage App (Phases 1–2)
 
 A web app for running a boat storage business: customers, boats, spots, billing, and an incident log with photos.
 Works in any browser on a computer, and on iPhone/iPad (add it to the home screen and it opens like an app).
@@ -18,6 +18,16 @@ The same code can run **any number of storage companies**, each with its own nam
 | **Invoices** | **Run billing** creates draft invoices for every rental due (monthly, quarterly or yearly). Review, then **Send all drafts**: emailed if the customer has an email, the rest combined into one PDF to print and mail. Record payments (check, cash, card, ACH), manual invoices for extra work, void, reprint. |
 | **Incident log** | Incidents, equipment and facility issues with photos from the phone camera, notes, and open/resolved status. |
 | **Setup** (Admin) | Company details & brand color, buildings & spots (add a whole range like A‑1…A‑40 at once), pricing by spot type, users, **Excel/CSV import** of existing customers, email settings, and a placeholder for online payments. |
+
+### Added in Phase 2
+
+| Area | What it does |
+|---|---|
+| **Multiple locations** | Setup → Locations & spots → add locations and assign buildings. With two or more, a location switcher appears at the top; the dashboard, spots, customers, invoices and waitlist all filter by it. Invoices name the location. |
+| **Waitlist** | People waiting for a spot, in order, with boat length, spot type and location wanted. Vacant spots on the Spots board list who fits. **Make customer** turns an entry into a customer; renting them a spot marks them placed. |
+| **E-signature agreements** | Setup → Agreement holds your agreement text with fill-in fields. From any rental: **Email link**, **Text link**, or **Sign here now** (hand over the iPad). The customer signs with a finger; a signed PDF with a signature record (time, IP, device, document fingerprint) is saved to their documents and emailed to them. **Have your attorney review the starter text.** |
+| **Reminders** | Payment due soon, past due (repeats, with a final notice), insurance expiring, and rental ending. Setup → Reminders turns on daily sending and sets the timing. Invoices → Reminders shows what's due, sends now, and lists history. Each reminder goes out once. Customers can opt out on their record. |
+| **Text messages** | Optional, through Twilio (Setup → Email & texts). Texts only go to customers marked as having agreed to receive them. |
 
 Online payments (Stripe) are **not** turned on — Setup → Online payments shows where it will go. It's in Phase 3 of the plan and can be added later without changing anything above.
 
@@ -97,7 +107,7 @@ It's a standard Node.js app, so it runs on most hosts (Railway, Render, Fly.io, 
 - Use HTTPS (hosts provide this). Sessions last 30 days so phones stay signed in.
 - **Back up** the `data` folder regularly — it holds everything.
 
-Optional environment variables: `PORT` (default 3000), `SESSION_SECRET` (otherwise generated and saved in the data folder), `COMPANIES_DIR`.
+Optional environment variables: `PORT` (default 3000), `SESSION_SECRET` (otherwise generated and saved in the data folder), `COMPANIES_DIR`, `PUBLIC_URL` (the web address used in signing links and messages; otherwise remembered from the first admin visit).
 
 ---
 

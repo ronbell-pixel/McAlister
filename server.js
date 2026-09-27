@@ -33,7 +33,19 @@ app.use((req, res, next) => {
 });
 
 const ctx = { db, paths, slug };
+let agreementsPublic = (req, res, next) => next();
+// Public signing API (no login) — must come before the signed-in API.
+app.use('/api/public', (req, res, next) => agreementsPublic(req, res, next));
 app.use('/api', require('./lib/auth').loadUser(db));
+// Remember the public web address for links in emails/texts.
+app.use('/api', (req, res, next) => {
+  if (req.user && !process.env.PUBLIC_URL) {
+    const { getSettings, setSetting } = require('./lib/db');
+    const url = `${req.protocol}://${req.get('host')}`;
+    if (getSettings(db).publicUrl !== url && !/localhost|127\.0\.0\.1/.test(url)) setSetting(db, 'publicUrl', url);
+  }
+  next();
+});
 app.use('/api', require('./routes/auth')(ctx));
 app.use('/api', require('./routes/setup')(ctx));
 app.use('/api', require('./routes/customers')(ctx));
@@ -41,6 +53,11 @@ app.use('/api', require('./routes/invoices')(ctx));
 app.use('/api', require('./routes/incidents')(ctx));
 app.use('/api', require('./routes/files')(ctx));
 app.use('/api', require('./routes/dashboard')(ctx));
+app.use('/api', require('./routes/waitlist')(ctx));
+app.use('/api', require('./routes/reminders')(ctx));
+const agreements = require('./routes/agreements')(ctx);
+app.use('/api', agreements.r);
+agreementsPublic = agreements.pub;
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 // Home-screen app manifest, named and colored for this company.
@@ -58,6 +75,7 @@ app.get('/manifest.webmanifest', (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', maxAge: '1h' }));
+app.get(/^\/sign\/[a-f0-9]+$/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'sign.html')));
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // Errors come back as JSON with a readable message.
@@ -71,6 +89,7 @@ app.use((err, req, res, next) => {
 });
 
 const port = parseInt(process.env.PORT || '3000', 10);
+require('./lib/reminders').startScheduler(db);
 app.listen(port, () => {
   console.log(`${slug} running at http://localhost:${port}`);
 });

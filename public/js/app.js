@@ -1,7 +1,22 @@
 // App shell: session, sign-in, navigation and routing.
 import { get, post, esc, icon, fail, fields, formData } from './ui.js';
 
-export const state = { session: null };
+export const state = { session: null, location: '' };
+
+// Location filter (only shown when there is more than one location).
+function loadLocation() {
+  let v = '';
+  try { v = localStorage.getItem('location') || ''; } catch { /* private mode */ }
+  const locs = state.session?.locations || [];
+  state.location = locs.length > 1 && locs.some((l) => String(l.id) === v) ? v : '';
+}
+export const multiLocation = () => (state.session?.locations || []).length > 1;
+// Adds ?location= to an API url when a location is picked.
+export function withLoc(url) {
+  if (!state.location) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'location=' + encodeURIComponent(state.location);
+}
+export const locationName = () => (state.session?.locations || []).find((l) => String(l.id) === state.location)?.name || '';
 export const can = (perm) => Boolean(state.session?.user?.permissions?.includes(perm));
 
 const app = document.getElementById('app');
@@ -17,6 +32,7 @@ function applyBrand(company) {
 async function loadSession() {
   state.session = await get('/session');
   applyBrand(state.session.company);
+  loadLocation();
 }
 
 // ---------- Sign in / first admin ----------
@@ -73,6 +89,7 @@ function navItems() {
     { href: '#/', key: 'home', label: 'Dashboard', ic: icon.home },
     { href: '#/customers', key: 'customers', label: 'Customers', ic: icon.users },
     { href: '#/spots', key: 'spots', label: 'Spots', ic: icon.grid },
+    { href: '#/waitlist', key: 'waitlist', label: 'Waitlist', ic: icon.clock },
   ];
   if (can('invoices')) items.push({ href: '#/invoices', key: 'invoices', label: 'Invoices', ic: icon.invoice });
   items.push({ href: '#/log', key: 'log', label: 'Incident log', short: 'Log', ic: icon.alert });
@@ -87,16 +104,20 @@ function renderShell() {
   // Phone tab bar: 4 main + More
   const tabs = nav.filter((n) => ['home', 'customers', 'invoices', 'log'].includes(n.key));
   if (tabs.length < 4) tabs.splice(2, 0, nav.find((n) => n.key === 'spots'));
+  const picker = multiLocation() ? `<select class="loc-picker" aria-label="Location">
+      <option value="">All locations</option>${state.session.locations.map((l) => `<option value="${l.id}" ${String(l.id) === state.location ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
+    </select>` : '';
   app.innerHTML = `<div class="shell">
     <aside class="sidebar">
       <div class="brand"><div class="brandmark">${icon.boat}</div><div><b>${esc(c.name)}</b><small>${esc(c.tagline || '')}</small></div></div>
+      ${picker ? `<div style="padding:0 4px 14px">${picker}</div>` : ''}
       ${nav.map((n) => `<a class="nav" data-key="${n.key}" href="${n.href}">${n.ic}<span>${n.label}</span></a>`).join('')}
       <div class="spacer"></div>
       <a class="nav" data-key="account" href="#/account">${icon.users}<span>My account</span></a>
       <div class="who"><b>${esc(u.name)}</b>${esc(roleName(u.role))}</div>
     </aside>
     <div>
-      <header class="topbar"><div class="brandmark">${icon.boat}</div><div class="brandname">${esc(c.name)}</div></header>
+      <header class="topbar"><div class="brandmark">${icon.boat}</div><div class="brandname">${esc(c.name)}</div>${picker}</header>
       <main id="main"></main>
     </div>
     <nav class="tabbar">
@@ -104,6 +125,17 @@ function renderShell() {
       <a data-key="more" href="#/more">${icon.more}<span>More</span></a>
     </nav>
   </div>`;
+}
+
+function wirePicker() {
+  document.querySelectorAll('.loc-picker').forEach((sel) => {
+    sel.onchange = () => {
+      state.location = sel.value;
+      try { localStorage.setItem('location', sel.value); } catch { /* ignore */ }
+      document.querySelectorAll('.loc-picker').forEach((o) => { o.value = sel.value; });
+      route();
+    };
+  });
 }
 
 export const roleName = (r) => ({ admin: 'Admin', owner: 'Owner', user: 'Staff' }[r] || r);
@@ -118,6 +150,7 @@ const routes = [
   [/^#\/customers\/(\d+)$/, 'customers', (id) => import('./views/customers.js').then((m) => m.customerDetail(Number(id)))],
   [/^#\/customers$/, 'customers', () => import('./views/customers.js').then((m) => m.customerList())],
   [/^#\/spots$/, 'spots', () => import('./views/spots.js').then((m) => m.spotsBoard())],
+  [/^#\/waitlist$/, 'waitlist', () => import('./views/waitlist.js').then((m) => m.waitlistPage())],
   [/^#\/invoices$/, 'invoices', () => import('./views/invoices.js').then((m) => m.invoiceList())],
   [/^#\/log\/(\d+)$/, 'log', (id) => import('./views/incidents.js').then((m) => m.incidentDetail(Number(id)))],
   [/^#\/log$/, 'log', () => import('./views/incidents.js').then((m) => m.incidentList())],
@@ -178,6 +211,7 @@ async function start(to) {
   if (s.needsFirstAdmin) return renderFirstAdmin();
   if (!s.user) return renderLogin();
   renderShell();
+  wirePicker();
   if (to && location.hash !== to) location.hash = to; else route();
 }
 

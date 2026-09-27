@@ -336,3 +336,15 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .btn.primary.danger-bg { background: var(--bad); border-color: var(--bad); color: #fff; }
 .back svg { width: 18px; height: 18px; flex: none; }
 .scroll-x table.data { min-width: 520px; }
+
+/* Phase 2 */
+.loc-picker { min-height: 38px; padding: 6px 10px; font-size: 14px; font-weight: 600; }
+.topbar .loc-picker { width: auto; max-width: 46%; }
+.sidebar .loc-picker { width: 100%; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace; cursor: pointer; color: var(--ink-2); }
+.chip:hover { border-color: var(--brand); color: var(--brand); }
+.agreement-text { white-space: pre-wrap; font-size: 14.5px; line-height: 1.55; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; max-height: 50vh; overflow: auto; }
+textarea.template { min-height: 360px; font-family: ui-monospace, Menlo, monospace; font-size: 13.5px; line-height: 1.5; }
+.sub-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.match { border: 1px dashed color-mix(in srgb, var(--brand) 45%, transparent); background: var(--brand-soft); border-radius: 10px; padding: 10px 12px; }

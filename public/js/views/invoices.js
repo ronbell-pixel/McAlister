@@ -1,5 +1,5 @@
 import { get, post, put, esc, money, dollars, date, icon, toast, fail, sheet, confirmSheet, fields, formData, fullName, today, statusBadge } from '../ui.js';
-import { main, state, clearQuery } from '../app.js';
+import { main, state, clearQuery, withLoc } from '../app.js';
 
 const TABS = [['draft', 'Drafts'], ['open', 'Open'], ['overdue', 'Overdue'], ['paid', 'Paid'], ['', 'All']];
 const CYCLE = { monthly: 'Monthly', quarterly: 'Quarterly', yearly: 'Yearly' };
@@ -14,6 +14,7 @@ export async function invoiceList() {
   main().innerHTML = `
     <div class="page-head"><h1>Invoices</h1>
       <div class="actions">
+        <button class="btn" id="remind">${icon.bell} Reminders</button>
         <button class="btn" id="newInv">${icon.plus} New invoice</button>
         <button class="btn primary" id="run">${icon.play} Run billing</button>
       </div></div>
@@ -41,7 +42,7 @@ export async function invoiceList() {
   async function load() {
     const params = new URLSearchParams({ status: tab, q: search });
     if (customerFilter) params.set('customer_id', customerFilter);
-    const rows = await get(`/invoices?${params}`);
+    const rows = await get(withLoc(`/invoices?${params}`));
     selected.clear(); updateBulk();
     const draftBar = document.getElementById('draftBar');
     const draftCount = tab === 'draft' ? rows.length : 0;
@@ -79,13 +80,15 @@ export async function invoiceList() {
   };
   document.getElementById('run').onclick = () => runBilling(load);
   document.getElementById('newInv').onclick = () => invoiceEditor(null, load);
+  document.getElementById('remind').onclick = () => remindersSheet().catch(fail);
   document.getElementById('mailedSel').onclick = async () => {
     await post('/invoices/mark-sent', { ids: [...selected] }).catch(fail);
     toast('Marked as mailed'); load();
   };
 
   await load();
-  if (q.has('run')) { clearQuery(); runBilling(load); }
+  if (q.has('reminders')) { clearQuery(); remindersSheet().catch(fail); }
+  else if (q.has('run')) { clearQuery(); runBilling(load); }
   else if (q.get('open')) { const id = Number(q.get('open')); clearQuery(); invoiceDetail(id, load); }
   else if (q.has('new')) { const cid = q.get('new'); clearQuery(); invoiceEditor(null, load, cid); }
 }
@@ -274,4 +277,38 @@ async function invoiceEditor(existing, reload, presetCustomer) {
   s.body.querySelector('#addLine').onclick = () => addLine();
   s.body.querySelector('form').onsubmit = (e) => e.preventDefault();
   recalc();
+}
+
+// ---------- Reminders ----------
+async function remindersSheet() {
+  const [pv, log] = await Promise.all([get('/reminders/preview'), get('/reminders/log')]);
+  const chan = (c) => c.map((x) => (x === 'sms' ? 'text' : 'email')).join(' + ') || '<span style="color:var(--bad)">no email / text-OK phone</span>';
+  const s = sheet({
+    title: 'Reminders',
+    wide: true,
+    body: `<div class="info" style="margin-bottom:14px">${pv.enabled
+        ? `Automatic reminders are <b>on</b> — they go out once a day.${pv.lastRun ? ` Last run ${date(pv.lastRun)}.` : ''}`
+        : 'Automatic reminders are <b>off</b>. You can still send these now, or turn on daily sending in Setup → Reminders.'}
+        ${state.session.user.permissions.includes('setup') ? ' <a href="#/setup/reminders" data-close>Reminder settings</a>' : ''}</div>
+      <h3 style="margin-bottom:8px">Ready to send (${pv.items.length})</h3>
+      <div class="card">${pv.items.length ? `<ul class="list">${pv.items.map((i) => `<li><div class="item"><div class="main">
+          <div class="title">${esc(i.customer_name)} <span class="badge ${i.kind === 'overdue' ? 'bad' : i.kind === 'due_soon' ? 'warn' : 'brand'}">${esc(i.label)}</span></div>
+          <div class="sub">${esc(i.detail)} · by ${chan(i.channels)}</div></div></div></li>`).join('')}</ul>`
+        : '<div class="empty">Nothing is due. Everyone is up to date.</div>'}</div>
+      <h3 style="margin:18px 0 8px">Recently sent</h3>
+      <div class="card">${log.length ? `<ul class="list">${log.slice(0, 25).map((l) => `<li><div class="item"><div class="main">
+          <div class="title" style="font-weight:500">${esc(l.customer_name || '')} · ${esc(l.label)}</div>
+          <div class="sub">${esc(l.detail || '')} · ${l.channel === 'sms' ? 'text' : 'email'} · ${date(l.sent_at)}</div></div>
+          ${l.status === 'sent' ? '<span class="badge good">Sent</span>' : `<span class="badge bad" title="${esc(l.detail)}">Failed</span>`}</div></li>`).join('')}</ul>`
+        : '<div class="empty">No reminders sent yet.</div>'}</div>`,
+    buttons: [
+      { label: 'Close', onClick: (c) => c() },
+      ...(pv.items.some((i) => i.channels.length) ? [{ label: `${icon.send} Send ${pv.items.filter((i) => i.channels.length).length} now`, kind: 'primary', onClick: async (close) => {
+        const r = await post('/reminders/run');
+        close();
+        toast(`${r.sent} reminder${r.sent === 1 ? '' : 's'} sent${r.failed ? `, ${r.failed} failed` : ''}`, r.failed ? 'error' : '');
+      } }] : []),
+    ],
+  });
+  s.body.querySelectorAll('[data-close]').forEach((a) => a.onclick = () => s.close());
 }
