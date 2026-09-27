@@ -1,0 +1,26 @@
+{
+  "name": "boat-storage-app",
+  "version": "1.0.0",
+  "description": "Boat storage CRM, billing and facility log \u2014 white-label for any storage company",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "new-company": "node scripts/new-company.js",
+    "seed-demo": "node scripts/seed-demo.js"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
+    "cookie-session": "^2.1.1",
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1",
+    "multer": "^2.4.0",
+    "nodemailer": "^10.0.11",
+    "pdfkit": "^0.20.2"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "private": true
+}

@@ -1,0 +1,17 @@
+{
+  "name": "McAlister Storage",
+  "tagline": "Boat & RV Storage",
+  "address": "",
+  "city": "",
+  "state": "",
+  "zip": "",
+  "phone": "",
+  "email": "",
+  "website": "",
+  "brandColor": "#0b5c8a",
+  "invoicePrefix": "MS-",
+  "invoiceStartNumber": 1001,
+  "paymentTermsDays": 15,
+  "invoiceFooter": "Thank you for storing with McAlister Storage!",
+  "billingLeadDays": 10
+}

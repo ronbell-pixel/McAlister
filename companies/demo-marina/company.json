@@ -1,0 +1,17 @@
+{
+  "name": "Demo Marina",
+  "tagline": "Boat Storage",
+  "address": "",
+  "city": "",
+  "state": "",
+  "zip": "",
+  "phone": "",
+  "email": "",
+  "website": "",
+  "brandColor": "#0b5c8a",
+  "invoicePrefix": "DM-",
+  "invoiceStartNumber": 1001,
+  "paymentTermsDays": 15,
+  "invoiceFooter": "Thank you for storing with Demo Marina!",
+  "billingLeadDays": 10
+}
