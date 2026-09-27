@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>My account</title>
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/icon-180.png">
+  <link rel="stylesheet" href="/css/app.css">
+  <style>
+    body { background: var(--bg); }
+    .wrap { max-width: 760px; margin: 0 auto; padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(40px + env(safe-area-inset-bottom, 0px)); }
+    .top { display: flex; align-items: center; gap: 12px; margin: 8px 0 18px; }
+    .top b { font-size: 18px; flex: 1; }
+    .hello { margin-bottom: 14px; }
+    .rent { display: grid; gap: 4px; }
+    .rent .big { font-size: 20px; font-weight: 700; }
+    #invlist .item .sub { white-space: normal; }
+  </style>
+</head>
+<body>
+  <div class="wrap" id="app"><div class="empty">Loading…</div></div>
+  <script type="module" src="/js/portal.js"></script>
+</body>
+</html>

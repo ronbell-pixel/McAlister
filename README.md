@@ -1,4 +1,4 @@
-# McAlister Storage — Boat Storage App (Phases 1–2)
+# McAlister Storage — Boat Storage App (Phases 1–3)
 
 A web app for running a boat storage business: customers, boats, spots, billing, and an incident log with photos.
 Works in any browser on a computer, and on iPhone/iPad (add it to the home screen and it opens like an app).
@@ -29,7 +29,18 @@ The same code can run **any number of storage companies**, each with its own nam
 | **Reminders** | Payment due soon, past due (repeats, with a final notice), insurance expiring, and rental ending. Setup → Reminders turns on daily sending and sets the timing. Invoices → Reminders shows what's due, sends now, and lists history. Each reminder goes out once. Customers can opt out on their record. |
 | **Text messages** | Optional, through Twilio (Setup → Email & texts). Texts only go to customers marked as having agreed to receive them. |
 
-Online payments (Stripe) are **not** turned on — Setup → Online payments shows where it will go. It's in Phase 3 of the plan and can be added later without changing anything above.
+### Added in Phase 3
+
+| Area | What it does |
+|---|---|
+| **Letters** | A library of editable letters — welcome/thank-you, payment thank-you, late payment warning, final notice, renewal, pickup reminder, rate change, general notice — with fill-in fields (name, spot, balance, list of past-due invoices…). Send one from a customer's page (edit it first if you like), or send to a whole group (everyone active, everyone past due, rentals ending, prospects). Emailed where possible, otherwise combined into one PDF to print. Every letter is saved to the customer's documents. Owners and admins only. |
+| **Late fees** | Setup → Reminders & late fees. A flat or percent fee is added once to each invoice still unpaid after the grace period, as a line on that invoice. Added automatically each morning (if turned on) or with **Add late fees now**; any fee can be waived per invoice. |
+| **Customer online accounts** | Customers go to `/portal`, enter their email, and get a sign-in link (no password). They see their storage, invoices (PDF), signed agreements, update their contact info and texting preference, and pay online if Stripe is on. Send a link from the customer page (**Account link**). |
+| **Online card payments (optional)** | Setup → Payments & portal. Paste a Stripe secret key and turn it on: emailed invoices and reminders get a **Pay online** link, customers can pay in their account, and invoices mark themselves paid. Card details are handled by Stripe's hosted checkout. Adding Stripe's webhook (address shown in Setup) is recommended so payments are recorded even if the customer closes the page early. |
+
+Online payments stay **off** until a Stripe key is entered; nothing changes for customers until then.
+
+
 
 ### Who can do what
 

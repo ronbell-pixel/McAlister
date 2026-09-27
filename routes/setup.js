@@ -11,7 +11,7 @@ const { sendMail } = require('../lib/mailer');
 const { removeChildren } = require('../lib/cleanup');
 const { locSql } = require('../lib/locations');
 
-const SECRET_KEYS = ['smtpPass', 'stripeSecretKey', 'twilioToken'];
+const SECRET_KEYS = ['smtpPass', 'stripeSecretKey', 'twilioToken', 'stripeWebhookSecret'];
 const cents = (v) => {
   const n = parseFloat(String(v ?? '').replace(/[$,\s]/g, ''));
   return Number.isFinite(n) ? Math.round(n * 100) : 0;
@@ -45,6 +45,15 @@ module.exports = ({ db, paths }) => {
     tx();
     res.json({ ok: true });
   });
+
+  r.post('/settings/test-stripe', requirePerm('setup'), wrap(async (req, res) => {
+    const st = getSettings(db);
+    if (!/^sk_(live|test)_/.test(st.stripeSecretKey || '')) throw httpError(400, 'Enter a Stripe secret key that starts with sk_live_ or sk_test_.');
+    const r2 = await fetch('https://api.stripe.com/v1/account', { headers: { Authorization: `Bearer ${st.stripeSecretKey}` } });
+    const d = await r2.json().catch(() => ({}));
+    if (!r2.ok) throw httpError(400, `Stripe didn't accept the key: ${d.error?.message || r2.status}`);
+    res.json({ ok: true, account: d.settings?.dashboard?.display_name || d.business_profile?.name || d.id, live: st.stripeSecretKey.startsWith('sk_live_') });
+  }));
 
   r.post('/settings/test-sms', requirePerm('setup'), wrap(async (req, res) => {
     const { sendSms } = require('../lib/sms');

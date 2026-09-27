@@ -5,8 +5,8 @@ async function refreshSession() { state.session = await get('/session'); }
 
 const TABS = [
   ['company', 'Company'], ['spots', 'Locations & spots'], ['pricing', 'Pricing'],
-  ['agreement', 'Agreement'], ['reminders', 'Reminders'], ['email', 'Email & texts'],
-  ['users', 'Users'], ['import', 'Import'], ['payments', 'Online payments'],
+  ['agreement', 'Agreement'], ['reminders', 'Reminders & late fees'], ['email', 'Email & texts'],
+  ['users', 'Users'], ['import', 'Import'], ['payments', 'Payments & portal'],
 ];
 
 export async function setup(tab = 'company') {
@@ -460,7 +460,25 @@ async function reminders(pane) {
       { name: 'reminderEndingDays', label: 'Rental ending: days before end date', type: 'number', hint: '0 turns this off' },
     ], s)}
     <div class="row" style="grid-column:1/-1"><button class="btn primary" type="submit">Save</button><a class="btn" href="#/invoices?reminders">${icon.bell} See what’s due now</a></div>
-    </form></div>`;
+    </form></div>
+    <div class="card pad" style="margin-top:16px">
+    <h2 style="margin-bottom:6px">Late fees</h2>
+    <p class="muted" style="margin-top:0">A late fee is added once to each invoice still unpaid after the grace period. It appears as a line on that invoice.
+      You can waive it on any invoice. Check that your fee follows your storage agreement and state law.</p>
+    <form class="grid2" id="lf">${fields([
+      { name: 'lateFeeEnabled', label: 'Add late fees automatically every day', type: 'checkbox', full: true },
+      { name: 'lateFeeType', label: 'Fee type', type: 'select', options: [['flat', 'Flat amount ($)'], ['percent', 'Percent of invoice (%)']] },
+      { name: 'lateFeeAmount', label: 'Amount', type: 'money', hint: 'Dollars, or percent if “Percent” is picked' },
+      { name: 'lateFeeGraceDays', label: 'Grace period (days after due date)', type: 'number' },
+      { name: 'lateFeeMinimum', label: 'Minimum fee for percent ($)', type: 'money' },
+    ], s)}
+    <div style="grid-column:1/-1"><button class="btn primary" type="submit">Save</button></div></form></div>`;
+  const lf = pane.querySelector('#lf');
+  lf.onsubmit = async (e) => {
+    e.preventDefault();
+    const v = formData(lf); v.lateFeeEnabled = String(v.lateFeeEnabled);
+    try { await put('/settings', v); toast('Late fee settings saved'); await refreshSession(); } catch (err) { fail(err); }
+  };
   const f = pane.querySelector('form');
   f.onsubmit = async (e) => {
     e.preventDefault();
@@ -469,12 +487,49 @@ async function reminders(pane) {
   };
 }
 
-// ---------- Payments ----------
+// ---------- Payments & portal ----------
 async function payments(pane) {
-  pane.innerHTML = `<div class="card pad">
-    <div class="spread"><h2>Online payments (Stripe)</h2><span class="badge">Not connected</span></div>
-    <p class="muted">Optional. When switched on, each emailed invoice will include a secure “Pay online” link and paid invoices will be marked automatically.
-      This is planned for a later phase and can be added any time without changing how you work today.</p>
-    <p class="muted" style="margin-bottom:0">Until then, record check, cash, card-in-person and bank payments with <b>Record payment</b> on any invoice.</p>
-  </div>`;
+  const s = await get('/settings');
+  const hook = `${location.origin}/api/public/stripe/webhook`;
+  pane.innerHTML = `<div class="stack">
+    <div class="card pad">
+      <div class="spread"><h2>Online card payments (Stripe)</h2>${state.session.features.stripe ? '<span class="badge good">On</span>' : '<span class="badge">Off</span>'}</div>
+      <p class="muted">Optional. When on, emailed invoices and reminders include a <b>Pay online</b> link, customers can pay in their online account,
+        and paid invoices are marked paid automatically. Stripe charges its standard card fee (about 2.9% + 30¢); card numbers go to Stripe, never this app.</p>
+      <ol class="small" style="padding-left:18px;color:var(--ink-2);margin:0 0 14px">
+        <li>Create a free account at <b>stripe.com</b> and finish its business setup.</li>
+        <li>In Stripe: <b>Developers → API keys</b>. Copy the <b>Secret key</b> (starts with <code>sk_live_</code>; use <code>sk_test_</code> to try it first).</li>
+        <li>Optional but recommended: <b>Developers → Webhooks → Add endpoint</b> with the address below, event <code>checkout.session.completed</code>. Copy its <b>Signing secret</b>.</li>
+      </ol>
+      <form class="grid2">${fields([
+        { name: 'stripeEnabled', label: 'Turn on online payments', type: 'checkbox', full: true },
+        { name: 'stripeSecretKey', label: s.stripeSecretKeySet ? 'Secret key (saved — leave blank to keep)' : 'Secret key', type: 'password', autocomplete: 'off', full: true, placeholder: 'sk_live_…' },
+        { name: 'stripeWebhookSecret', label: s.stripeWebhookSecretSet ? 'Webhook signing secret (saved)' : 'Webhook signing secret (optional)', type: 'password', autocomplete: 'off', full: true, placeholder: 'whsec_…' },
+      ], s)}
+      <label class="field" style="grid-column:1/-1"><span>Webhook address for Stripe</span><input readonly value="${esc(hook)}" onclick="this.select()"></label>
+      <div class="row" style="grid-column:1/-1"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="testStripe">Check key</button></div>
+      </form>
+    </div>
+
+    <div class="card pad">
+      <div class="spread"><h2>Customer online accounts</h2>${s.portalEnabled === 'true' ? '<span class="badge good">On</span>' : '<span class="badge">Off</span>'}</div>
+      <p class="muted">Customers sign in with an emailed link (no password) at <b>${esc(location.origin)}/portal</b> to see their storage, invoices and signed agreements,
+        update their contact info, and pay online if Stripe is on. Send someone their link from their customer page (<b>Account link</b>).</p>
+      <form id="pf">${fields([{ name: 'portalEnabled', label: 'Let customers use online accounts', type: 'checkbox' }], s)}
+        <button class="btn primary" type="submit">Save</button></form>
+    </div></div>`;
+  const f = pane.querySelector('form');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const v = formData(f); v.stripeEnabled = String(v.stripeEnabled);
+    try { await put('/settings', v); toast('Saved'); await refreshSession(); payments(pane); } catch (err) { fail(err); }
+  };
+  pane.querySelector('#testStripe').onclick = async () => {
+    try { const r = await post('/settings/test-stripe'); toast(`Connected to Stripe: ${r.account}${r.live ? '' : ' (test mode)'}`); } catch (err) { fail(err); }
+  };
+  const pf = pane.querySelector('#pf');
+  pf.onsubmit = async (e) => {
+    e.preventDefault();
+    try { await put('/settings', { portalEnabled: String(pf.portalEnabled.checked) }); toast('Saved'); await refreshSession(); payments(pane); } catch (err) { fail(err); }
+  };
 }

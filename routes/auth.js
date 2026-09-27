@@ -35,7 +35,7 @@ module.exports = ({ db }) => {
       company: publicCompany(),
       needsFirstAdmin: userCount() === 0,
       user: req.user ? { ...req.user, permissions: permissionsFor(req.user.role) } : null,
-      features: { email: isConfigured(s), sms: sms.isConfigured(s), stripe: s.stripeEnabled === 'true', reminders: s.remindersEnabled === 'true' },
+      features: { email: isConfigured(s), sms: sms.isConfigured(s), stripe: require('../lib/stripe').isConfigured(s), reminders: s.remindersEnabled === 'true', lateFees: s.lateFeeEnabled === 'true', portal: s.portalEnabled === 'true' },
       locations: req.user ? db.prepare('SELECT id, name FROM locations ORDER BY sort, name COLLATE NOCASE').all() : [],
     });
   });

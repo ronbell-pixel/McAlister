@@ -92,6 +92,7 @@ function navItems() {
     { href: '#/waitlist', key: 'waitlist', label: 'Waitlist', ic: icon.clock },
   ];
   if (can('invoices')) items.push({ href: '#/invoices', key: 'invoices', label: 'Invoices', ic: icon.invoice });
+  if (can('letters')) items.push({ href: '#/letters', key: 'letters', label: 'Letters', ic: icon.mail });
   items.push({ href: '#/log', key: 'log', label: 'Incident log', short: 'Log', ic: icon.alert });
   if (can('setup')) items.push({ href: '#/setup', key: 'setup', label: 'Setup', ic: icon.gear });
   return items;
@@ -150,6 +151,7 @@ const routes = [
   [/^#\/customers\/(\d+)$/, 'customers', (id) => import('./views/customers.js').then((m) => m.customerDetail(Number(id)))],
   [/^#\/customers$/, 'customers', () => import('./views/customers.js').then((m) => m.customerList())],
   [/^#\/spots$/, 'spots', () => import('./views/spots.js').then((m) => m.spotsBoard())],
+  [/^#\/letters$/, 'letters', () => import('./views/letters.js').then((m) => m.lettersPage())],
   [/^#\/waitlist$/, 'waitlist', () => import('./views/waitlist.js').then((m) => m.waitlistPage())],
   [/^#\/invoices$/, 'invoices', () => import('./views/invoices.js').then((m) => m.invoiceList())],
   [/^#\/log\/(\d+)$/, 'log', (id) => import('./views/incidents.js').then((m) => m.incidentDetail(Number(id)))],
@@ -186,7 +188,7 @@ export async function route() {
   for (const [re, key, fn] of routes) {
     const m = hash.match(re);
     if (m) {
-      const need = { invoices: 'invoices', setup: 'setup' }[key];
+      const need = { invoices: 'invoices', setup: 'setup', letters: 'letters' }[key];
       if (need && !can(need)) { location.hash = '#/'; return; }
       setActive(key);
       window.scrollTo(0, 0);

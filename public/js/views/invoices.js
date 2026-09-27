@@ -1,4 +1,4 @@
-import { get, post, put, esc, money, dollars, date, icon, toast, fail, sheet, confirmSheet, fields, formData, fullName, today, statusBadge } from '../ui.js';
+import { get, post, put, api, esc, money, dollars, date, icon, toast, fail, sheet, confirmSheet, fields, formData, fullName, today, statusBadge } from '../ui.js';
 import { main, state, clearQuery, withLoc } from '../app.js';
 
 const TABS = [['draft', 'Drafts'], ['open', 'Open'], ['overdue', 'Overdue'], ['paid', 'Paid'], ['', 'All']];
@@ -154,7 +154,7 @@ async function sendDrafts(reload) {
 
 // ---------- Detail ----------
 async function invoiceDetail(id, reload) {
-  const { invoice: i, items, customer: c } = await get(`/invoices/${id}`);
+  const { invoice: i, items, customer: c, pay_url: payUrl } = await get(`/invoices/${id}`);
   const hasEmail = Boolean(c.email);
   const open = i.status === 'draft' || i.status === 'sent';
   const s = sheet({
@@ -176,6 +176,9 @@ async function invoiceDetail(id, reload) {
       <div class="row" style="margin-top:16px">
         <a class="btn" target="_blank" rel="noopener" href="/api/invoices-pdf?ids=${i.id}">${icon.printer} Print / PDF</a>
         ${open ? `<button class="btn" data-a="edit">${icon.edit} Edit</button>` : ''}
+        ${open && !(i.late_fee_cents > 0) ? `<button class="btn" data-a="fee">${icon.plus} Late fee</button>` : ''}
+        ${open && i.late_fee_cents > 0 ? `<button class="btn" data-a="waive">Waive late fee</button>` : ''}
+        ${payUrl ? `<button class="btn" data-a="paylink">${icon.link} Pay link</button>` : ''}
         ${open ? `<button class="btn ghost danger" data-a="void">Void</button>` : ''}
         ${i.status === 'paid' ? `<button class="btn ghost" data-a="unpaid">Mark unpaid</button>` : ''}
       </div>`,
@@ -197,6 +200,23 @@ async function invoiceDetail(id, reload) {
         await post(`/invoices/${i.id}/void`); s.close(); toast('Voided'); reload();
       }
       if (b.dataset.a === 'unpaid') { await post(`/invoices/${i.id}/unpaid`); s.close(); reload(); }
+      if (b.dataset.a === 'fee') {
+        const fs = sheet({
+          title: 'Add late fee',
+          body: fields([{ name: 'amount', label: 'Fee ($)', type: 'money', hint: 'Leave blank to use your standard late fee (Setup → Reminders)' }]),
+          buttons: [{ label: 'Cancel', onClick: (c2) => c2() }, { label: 'Add fee', kind: 'primary', onClick: async (c2) => {
+            await post(`/invoices/${i.id}/late-fee`, { amount: fs.body.querySelector('input').value }); c2(); s.close(); toast('Late fee added'); reload();
+          } }],
+        });
+      }
+      if (b.dataset.a === 'waive' && (await confirmSheet('Waive late fee?', 'Remove the late fee from this invoice? It won’t be added again automatically.', 'Waive'))) {
+        await api('DELETE', `/invoices/${i.id}/late-fee`); s.close(); toast('Late fee waived'); reload();
+      }
+      if (b.dataset.a === 'paylink') {
+        sheet({ title: 'Pay-online link', body: `<p style="margin-top:0">Anyone with this link can see and pay this invoice by card. It’s included automatically in emailed invoices and reminders.</p>
+          <label class="field"><span>Link</span><input readonly value="${esc(payUrl)}" onclick="this.select()"></label>
+          <a class="btn block" href="${esc(payUrl)}" target="_blank" rel="noopener">Open payment page</a>` });
+      }
     } catch (e) { fail(e); }
   });
 }
@@ -281,7 +301,7 @@ async function invoiceEditor(existing, reload, presetCustomer) {
 
 // ---------- Reminders ----------
 async function remindersSheet() {
-  const [pv, log] = await Promise.all([get('/reminders/preview'), get('/reminders/log')]);
+  const [pv, log, lf] = await Promise.all([get('/reminders/preview'), get('/reminders/log'), get('/late-fees/preview')]);
   const chan = (c) => c.map((x) => (x === 'sms' ? 'text' : 'email')).join(' + ') || '<span style="color:var(--bad)">no email / text-OK phone</span>';
   const s = sheet({
     title: 'Reminders',
@@ -290,6 +310,10 @@ async function remindersSheet() {
         ? `Automatic reminders are <b>on</b> — they go out once a day.${pv.lastRun ? ` Last run ${date(pv.lastRun)}.` : ''}`
         : 'Automatic reminders are <b>off</b>. You can still send these now, or turn on daily sending in Setup → Reminders.'}
         ${state.session.user.permissions.includes('setup') ? ' <a href="#/setup/reminders" data-close>Reminder settings</a>' : ''}</div>
+      ${lf.invoices.length ? `<div class="card pad" style="margin-bottom:16px"><div class="spread" style="flex-wrap:wrap">
+        <div><b>${lf.invoices.length} invoice${lf.invoices.length === 1 ? '' : 's'} qualify for a late fee</b>
+          <div class="muted small">${lf.enabled ? 'Late fees are added automatically each morning.' : 'Automatic late fees are off.'} Total ${money(lf.invoices.reduce((a, x) => a + x.fee_cents, 0))}.</div></div>
+        <button class="btn" id="applyFees">Add late fees now</button></div></div>` : ''}
       <h3 style="margin-bottom:8px">Ready to send (${pv.items.length})</h3>
       <div class="card">${pv.items.length ? `<ul class="list">${pv.items.map((i) => `<li><div class="item"><div class="main">
           <div class="title">${esc(i.customer_name)} <span class="badge ${i.kind === 'overdue' ? 'bad' : i.kind === 'due_soon' ? 'warn' : 'brand'}">${esc(i.label)}</span></div>
@@ -311,4 +335,9 @@ async function remindersSheet() {
     ],
   });
   s.body.querySelectorAll('[data-close]').forEach((a) => a.onclick = () => s.close());
+  const af = s.body.querySelector('#applyFees');
+  if (af) af.onclick = async () => {
+    if (!(await confirmSheet('Add late fees?', `Add late fees to ${lf.invoices.length} past-due invoice${lf.invoices.length === 1 ? '' : 's'}?`, 'Add fees'))) return;
+    try { const r = await post('/late-fees/run'); toast(`${r.added} late fee${r.added === 1 ? '' : 's'} added`); s.close(); remindersSheet(); } catch (e) { fail(e); }
+  };
 }

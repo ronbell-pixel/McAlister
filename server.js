@@ -14,6 +14,13 @@ const db = openDb(paths.dbFile, loadCompanyDefaults(slug));
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
+
+const ctx = { db, paths, slug };
+const agreements = require('./routes/agreements')(ctx);
+const portal = require('./routes/portal')(ctx);
+
+// Stripe webhook needs the raw request body, so it comes before the JSON parser.
+app.post('/api/public/stripe/webhook', ...portal.webhook);
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieSession({
   name: `sid-${slug}`,
@@ -32,10 +39,11 @@ app.use((req, res, next) => {
   next();
 });
 
-const ctx = { db, paths, slug };
-let agreementsPublic = (req, res, next) => next();
-// Public signing API (no login) — must come before the signed-in API.
-app.use('/api/public', (req, res, next) => agreementsPublic(req, res, next));
+// Public pages' APIs (no login): signing, pay-online, portal sign-in requests.
+app.use('/api/public', agreements.pub);
+app.use('/api/public', portal.pub);
+// Customer portal API (customer session, separate from staff logins).
+app.use('/api/portal', portal.portal);
 app.use('/api', require('./lib/auth').loadUser(db));
 // Remember the public web address for links in emails/texts.
 app.use('/api', (req, res, next) => {
@@ -55,9 +63,9 @@ app.use('/api', require('./routes/files')(ctx));
 app.use('/api', require('./routes/dashboard')(ctx));
 app.use('/api', require('./routes/waitlist')(ctx));
 app.use('/api', require('./routes/reminders')(ctx));
-const agreements = require('./routes/agreements')(ctx);
+app.use('/api', require('./routes/letters')(ctx));
 app.use('/api', agreements.r);
-agreementsPublic = agreements.pub;
+app.use('/api', portal.staff);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 // Home-screen app manifest, named and colored for this company.
@@ -75,6 +83,7 @@ app.get('/manifest.webmanifest', (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', maxAge: '1h' }));
+app.use(portal.pages);
 app.get(/^\/sign\/[a-f0-9]+$/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'sign.html')));
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 

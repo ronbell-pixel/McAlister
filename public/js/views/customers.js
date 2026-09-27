@@ -101,6 +101,8 @@ export async function customerDetail(id) {
             ${can('invoices') && balance ? `<span class="badge warn">${money(balance)} open</span>` : ''}</div>
         </div>
         <div class="actions row" style="gap:8px">
+          ${can('letters') ? `<button class="btn sm" id="letter">${icon.mail}<span>Letter</span></button>` : ''}
+          ${state.session.features.portal ? `<button class="btn sm" id="portal">${icon.link}<span>Account link</span></button>` : ''}
           <button class="btn sm" id="edit">${icon.edit}<span>Edit</span></button>
         </div>
       </div>
@@ -132,6 +134,10 @@ export async function customerDetail(id) {
 
   const reload = () => customerDetail(id).catch(fail);
   document.getElementById('edit').onclick = () => customerForm(c, reload);
+  const letterBtn = document.getElementById('letter');
+  if (letterBtn) letterBtn.onclick = () => import('./letters.js').then((m) => m.letterToCustomer(c, reload)).catch(fail);
+  const portalBtn = document.getElementById('portal');
+  if (portalBtn) portalBtn.onclick = () => portalInvite(c).catch(fail);
   const delBtn = document.getElementById('delete');
   if (delBtn) delBtn.onclick = async () => {
     if (!(await confirmSheet('Delete customer?', `This permanently removes ${fullName(c)} with their boats, notes, photos and invoices. To keep history, mark them Inactive instead.`, 'Delete', true))) return;
@@ -354,4 +360,24 @@ function renderInvoices(d) {
       <div class="end"><div class="num" style="font-weight:600">${money(i.total_cents)}</div>${statusBadge(i)}</div></a></li>`).join('')
       : '<li class="empty">No invoices yet.</li>'}
       ${d.invoices.length > 12 ? `<li><a class="item" href="#/invoices?customer=${d.customer.id}"><div class="main muted">All ${d.invoices.length} invoices</div></a></li>` : ''}</ul>`;
+}
+
+// Invite a customer to their online account (portal).
+async function portalInvite(c) {
+  const f = state.session.features;
+  const s = sheet({
+    title: 'Online account',
+    body: `<p style="margin-top:0">${esc(fullName(c))} can see their storage, invoices and signed agreements, update their contact info${f.stripe ? ', and pay by card' : ''}.
+      They sign in with a link — no password. After the first time, they can go to <b>${esc(location.origin)}/portal</b> and enter their email.</p>
+      ${c.portal_last_login ? `<p class="muted small">Last signed in ${when(c.portal_last_login)}.</p>` : ''}
+      <div id="link"></div>`,
+    buttons: [
+      { label: `${icon.link} Get link`, onClick: async () => {
+        const r = await post(`/customers/${c.id}/portal-invite`, {});
+        s.body.querySelector('#link').innerHTML = `<label class="field"><span>Sign-in link (good for 7 days, one use)</span><input readonly value="${esc(r.url)}" onclick="this.select()"></label>`;
+      } },
+      ...(c.phone && f.sms ? [{ label: `${icon.chat} Text it`, onClick: async (close) => { await post(`/customers/${c.id}/portal-invite`, { via: 'sms' }); close(); toast('Account link texted'); } }] : []),
+      ...(c.email && f.email ? [{ label: `${icon.mail} Email it`, kind: 'primary', onClick: async (close) => { await post(`/customers/${c.id}/portal-invite`, { via: 'email' }); close(); toast('Account link emailed'); } }] : []),
+    ],
+  });
 }

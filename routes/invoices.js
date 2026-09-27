@@ -6,6 +6,7 @@ const { runBilling, recalcTotal, nextInvoiceNumber, today, addDays } = require('
 const { invoicesPdf, money, usDate } = require('../lib/pdf');
 const { sendMail } = require('../lib/mailer');
 const { locationId, SQL } = require('../lib/locations');
+const stripe = require('../lib/stripe');
 
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
 
@@ -45,7 +46,12 @@ module.exports = ({ db }) => {
       ORDER BY i.issue_date DESC, i.id DESC LIMIT 1000`).all(args));
   });
 
-  r.get('/invoices/:id', P, (req, res) => res.json(loadFull(Number(req.params.id))));
+  r.get('/invoices/:id', P, (req, res) => {
+    const full = loadFull(Number(req.params.id));
+    const s = getSettings(db);
+    if (stripe.isConfigured(s) && full.invoice.status === 'sent') full.pay_url = stripe.payLink(db, s, full.invoice.id, `${req.protocol}://${req.get('host')}`);
+    res.json(full);
+  });
 
   // Contracts that would be billed by a run through the given date.
   r.get('/billing/preview', P, (req, res) => {
@@ -76,9 +82,16 @@ module.exports = ({ db }) => {
   };
   const writeItems = (invoiceId, items) => {
     db.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').run(invoiceId);
-    const ins = db.prepare('INSERT INTO invoice_items (invoice_id, description, qty, unit_cents, amount_cents) VALUES (?, ?, ?, ?, ?)');
-    for (const it of items) ins.run(invoiceId, it.description, it.qty, it.unit_cents, it.amount_cents);
+    const ins = db.prepare('INSERT INTO invoice_items (invoice_id, description, qty, unit_cents, amount_cents, kind) VALUES (?, ?, ?, ?, ?, ?)');
+    let fee = 0;
+    for (const it of items) {
+      const isFee = /^late fee/i.test(it.description);
+      if (isFee) fee += it.amount_cents;
+      ins.run(invoiceId, it.description, it.qty, it.unit_cents, it.amount_cents, isFee ? 'late_fee' : '');
+    }
     recalcTotal(db, invoiceId);
+    const cur = db.prepare('SELECT late_fee_cents FROM invoices WHERE id = ?').get(invoiceId);
+    if (fee || cur.late_fee_cents > 0) db.prepare('UPDATE invoices SET late_fee_cents = ? WHERE id = ?').run(fee || -1, invoiceId);
   };
 
   r.post('/invoices', P, (req, res) => {
@@ -144,6 +157,7 @@ module.exports = ({ db }) => {
       to: customer.email,
       subject: `Invoice ${invoice.number} from ${s.name}`,
       text: `Hi ${customer.first_name || nameOf(customer)},\n\nAttached is invoice ${invoice.number} for ${money(invoice.total_cents)}, due ${usDate(invoice.due_date)}.\n\n` +
+        (stripe.isConfigured(s) ? `Pay online by card: ${stripe.payLink(db, s, invoice.id)}\n\n` : '') +
         `If you have any questions, just reply to this email${s.phone ? ' or call ' + s.phone : ''}.\n\nThank you,\n${s.name}`,
       attachments: [{ filename: `Invoice-${invoice.number}.pdf`, content: pdf }],
     });
@@ -189,6 +203,28 @@ module.exports = ({ db }) => {
   r.post('/invoices/:id/unpaid', P, (req, res) => {
     const { invoice } = loadFull(Number(req.params.id));
     db.prepare(`UPDATE invoices SET status = CASE WHEN sent_at IS NULL THEN 'draft' ELSE 'sent' END, paid_at = NULL, paid_method = NULL WHERE id = ?`).run(invoice.id);
+    res.json({ ok: true });
+  });
+
+  // ---- Late fees ----
+  const lateFees = require('../lib/latefees');
+  r.get('/late-fees/preview', P, (req, res) => {
+    const s = getSettings(db);
+    res.json({ enabled: s.lateFeeEnabled === 'true', invoices: lateFees.collect(db, s) });
+  });
+  r.post('/late-fees/run', P, (req, res) => res.json(lateFees.run(db, { userId: req.user.id })));
+  r.post('/invoices/:id/late-fee', P, (req, res) => {
+    const { invoice } = loadFull(Number(req.params.id));
+    if (invoice.late_fee_cents > 0) throw httpError(400, 'This invoice already has a late fee.');
+    if (!['sent', 'draft'].includes(invoice.status)) throw httpError(400, 'Late fees can only go on unpaid invoices.');
+    let cents = req.body?.amount != null && req.body.amount !== '' ? Math.round(parseFloat(String(req.body.amount).replace(/[$,]/g, '')) * 100) : lateFees.feeFor(invoice, getSettings(db));
+    if (!(cents > 0)) throw httpError(400, 'Enter a fee amount.');
+    db.prepare('UPDATE invoices SET late_fee_cents = 0 WHERE id = ?').run(invoice.id);
+    lateFees.apply(db, invoice.id, cents, { userId: req.user.id });
+    res.json({ ok: true });
+  });
+  r.delete('/invoices/:id/late-fee', P, (req, res) => {
+    if (!lateFees.remove(db, Number(req.params.id), { userId: req.user.id })) throw httpError(400, 'No late fee to remove.');
     res.json({ ok: true });
   });
 
